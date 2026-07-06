@@ -1,0 +1,261 @@
+// Liver Department App — database schema
+// Migration already generated in prisma/migrations/ — `prisma migrate deploy`
+// (already wired into render.yaml's build command) applies it automatically.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---- Staff (Screen 2/3: Register + create PIN) ----
+model Staff {
+  id           String   @id @default(uuid())
+  name         String
+  designation  Designation
+  city         City
+  pinHash      String              // bcrypt hash — used to verify the PIN
+  pinIndex     String   @unique    // deterministic hash — used only to look up & enforce uniqueness
+  createdAt    DateTime @default(now())
+
+  patients          Patient[]           @relation("CreatedBy")
+  meldReadings      MeldReading[]       @relation("EnteredBy")
+  cpReadings        ChildPughReading[]  @relation("EnteredBy")
+  endoscopyFindings EndoscopyFinding[]  @relation("EnteredBy")
+  etiologies        Etiology[]          @relation("EnteredBy")
+  diseaseStatuses   DiseaseStatusEntry[] @relation("EnteredBy")
+  ddltRegistrations DdltRegistration[]  @relation("EnteredBy")
+  patientStatuses   PatientStatusEntry[] @relation("EnteredBy")
+  medications       Medication[]        @relation("EnteredBy")
+  medicationChanges MedicationChange[]  @relation("EnteredBy")
+  hccScreenings     HccScreening[]      @relation("EnteredBy")
+}
+
+enum Designation {
+  CONSULTANT
+  REGISTRAR
+  PHYSICIAN_ASSISTANT
+  COORDINATOR
+  MARKETING_EXECUTIVE
+}
+
+enum City {
+  CHENNAI
+  COIMBATORE
+}
+
+// ---- Patients (Screen 6/7) ----
+model Patient {
+  id                String   @id @default(uuid())
+  name              String
+  age               Int
+  sex               Sex
+  town              String
+  referralSource    String?  // Screen 6 — Walk-in / Doctor Referral / Marketing Camp-Outreach / Online Enquiry / Other
+  referringDoctor   String?  // Screen 6 — optional
+  createdById       String
+  createdBy         Staff    @relation("CreatedBy", fields: [createdById], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  phones            PatientPhone[]
+  meldReadings      MeldReading[]
+  cpReadings        ChildPughReading[]
+  endoscopyFindings EndoscopyFinding[]
+  etiologies        Etiology[]
+  diseaseStatuses   DiseaseStatusEntry[]
+  ddltRegistrations DdltRegistration[]
+  patientStatuses   PatientStatusEntry[]
+  medications       Medication[]
+  medicationChanges MedicationChange[]
+  hccScreenings     HccScreening[]
+}
+
+enum Sex {
+  MALE
+  FEMALE
+  OTHER
+}
+
+// ---- Phone numbers per patient (Screen 6 — name + relation per number) ----
+model PatientPhone {
+  id          String   @id @default(uuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  number      String
+  contactName String?
+  relation    Relation?
+}
+
+enum Relation {
+  SELF
+  SPOUSE
+  SON
+  DAUGHTER
+  PARENT
+  SIBLING
+  CAREGIVER
+  OTHER
+}
+
+// ---- MELD / MELD-Na readings (Screen 7 — multiple dated entries) ----
+model MeldReading {
+  id           String   @id @default(uuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date         DateTime
+  bilirubin    Float
+  inr          Float
+  creatinine   Float
+  sodium       Float?
+  onDialysis   Boolean  @default(false)
+  meld         Int      // computed, stored for history/audit
+  meldNa       Int?     // computed, stored for history/audit
+  enteredById  String
+  enteredBy    Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// ---- Child-Pugh readings (Screen 8 — multiple dated entries) ----
+model ChildPughReading {
+  id             String   @id @default(uuid())
+  patientId      String
+  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date           DateTime
+  bilirubin      Float
+  albumin        Float
+  inr            Float
+  ascitesPoints  Int      // 1, 2, or 3
+  encephPoints   Int      // 1, 2, or 3
+  totalScore     Int      // computed, stored for history/audit
+  scoreClass     String   // "A" | "B" | "C"
+  enteredById    String
+  enteredBy      Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt      DateTime @default(now())
+}
+
+// ---- Endoscopy findings (Screen 14 — only when Encounter Location = Endoscopy Suite) ----
+model EndoscopyFinding {
+  id              String   @id @default(uuid())
+  patientId       String
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date            DateTime @default(now())
+  varices         String   // None / Grade I / Grade II / Grade III
+  redSigns        String?  // Yes / No
+  gastricVarices  String   // None / GOV1 / GOV2 / IGV1 / IGV2
+  phg             String   // None / Mild / Severe (portal hypertensive gastropathy)
+  intervention    String?  // None / Band ligation / Sclerotherapy / Glue injection / Other
+  notes           String?
+  enteredById     String
+  enteredBy       Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt       DateTime @default(now())
+}
+
+// ---- Etiology (Screen 10) — kept as history so a diagnosis can be revised without losing the record ----
+model Etiology {
+  id           String   @id @default(uuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  etiology     String   // e.g. "Hepatitis B", "NAFLD/NASH", "Wilson's Disease"...
+  supportInfo  Json?    // free-form key/value detail fields specific to the chosen etiology
+  notes        String?
+  enteredById  String
+  enteredBy    Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// ---- Disease status — compensated/decompensated (Screen 11) ----
+model DiseaseStatusEntry {
+  id            String   @id @default(uuid())
+  patientId     String
+  patient       Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  status        String   // "compensated" | "decompensated"
+  events        Json?    // array of decompensation event names, e.g. ["Ascites", "Jaundice"]
+  eventDetails  Json?    // { [eventName]: { fieldKey: value } }
+  onsetDate     DateTime?
+  enteredById   String
+  enteredBy     Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt     DateTime @default(now())
+}
+
+// ---- DDLT registration (Screen 12) — kept as history so status changes over time are traceable ----
+model DdltRegistration {
+  id              String   @id @default(uuid())
+  patientId       String
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  registered      String   // "yes" | "no"
+  center          String?
+  waitlistNumber  String?
+  enteredById     String
+  enteredBy       Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt       DateTime @default(now())
+}
+
+// ---- Patient status — end-state tracking (Screen 17) ----
+model PatientStatusEntry {
+  id           String   @id @default(uuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  status       String   // "Active / Under care", "Transplanted", "Expired", "Lost to Follow-up", ...
+  details      Json?    // status-specific fields, e.g. transplant date/center, cause of death
+  notes        String?
+  enteredById  String
+  enteredBy    Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// ---- Medications (Screen 19) — current list ----
+model Medication {
+  id           String   @id @default(uuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  name         String
+  dose         String
+  frequency    String
+  status       String   @default("Active") // "Active" | "Stopped"
+  startDate    DateTime
+  enteredById  String
+  enteredBy    Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  changes      MedicationChange[]
+}
+
+// ---- Medication change log (Screen 19) — dated history of starts/stops/dose changes ----
+model MedicationChange {
+  id            String      @id @default(uuid())
+  patientId     String
+  patient       Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  medicationId  String?
+  medication    Medication? @relation(fields: [medicationId], references: [id], onDelete: SetNull)
+  medName       String      // denormalized so history survives even if the medication row is later removed
+  action        String      // "Started" | "Dose/frequency changed" | "Stopped" | "Restarted"
+  date          DateTime
+  dose          String?
+  frequency     String?
+  reason        String?
+  enteredById   String
+  enteredBy     Staff       @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt     DateTime    @default(now())
+}
+
+// ---- HCC surveillance (Screen 20 — multiple dated screenings) ----
+model HccScreening {
+  id           String   @id @default(uuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date         DateTime
+  afp          Float
+  modality     String   // Ultrasound / Triple-phase CT / Contrast-enhanced MRI / CT (routine) / Other
+  findings     String   // No lesion / Indeterminate nodule / Suspicious lesion / Definite HCC
+  lirads       String?  // LR-1 .. LR-5, LR-M, LR-TIV
+  nextDue      DateTime
+  notes        String?
+  enteredById  String
+  enteredBy    Staff    @relation("EnteredBy", fields: [enteredById], references: [id])
+  createdAt    DateTime @default(now())
+}
